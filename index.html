@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Horse Runner</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #87CEEB; /* Sky blue */
+            touch-action: none; /* Prevent scroll on touch */
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            user-select: none;
+        }
+        #gameCanvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            right: 20px;
+            display: flex;
+            justify-content: space-between;
+            color: white;
+            font-size: 24px;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+            pointer-events: none;
+            z-index: 10;
+        }
+        #gameOverScreen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            display: none; /* Hidden initially */
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            z-index: 20;
+        }
+        #gameOverScreen h1 {
+            font-size: 48px;
+            margin-bottom: 20px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+            color: #FF5252;
+        }
+        #restartBtn {
+            padding: 15px 30px;
+            font-size: 24px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            transition: background-color 0.2s, transform 0.1s;
+        }
+        #restartBtn:hover {
+            background-color: #45a049;
+        }
+        #restartBtn:active {
+            transform: scale(0.95);
+        }
+        @media (max-width: 600px) {
+            #ui {
+                font-size: 18px;
+            }
+            #gameOverScreen h1 {
+                font-size: 32px;
+            }
+            #restartBtn {
+                font-size: 18px;
+                padding: 10px 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <div id="scoreDisplay">Score: 0</div>
+        <div id="highScoreDisplay">High Score: 0</div>
+    </div>
+    
+    <div id="gameOverScreen">
+        <h1>Game Over!</h1>
+        <button id="restartBtn">Play Again</button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreDisplay = document.getElementById('scoreDisplay');
+        const highScoreDisplay = document.getElementById('highScoreDisplay');
+        const gameOverScreen = document.getElementById('gameOverScreen');
+        const restartBtn = document.getElementById('restartBtn');
+
+        // Audio Context setup for sound effects
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        const audioCtx = new AudioContext();
+
+        function playSound(type) {
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+            const osc = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            osc.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            const now = audioCtx.currentTime;
+
+            if (type === 'jump') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(300, now);
+                osc.frequency.exponentialRampToValueAtTime(600, now + 0.1);
+                gainNode.gain.setValueAtTime(0, now);
+                gainNode.gain.linearRampToValueAtTime(0.3, now + 0.05);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+                osc.start(now);
+                osc.stop(now + 0.2);
+            } else if (type === 'crash') {
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(150, now);
+                osc.frequency.exponentialRampToValueAtTime(50, now + 0.3);
+                gainNode.gain.setValueAtTime(0.5, now);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+                osc.start(now);
+                osc.stop(now + 0.3);
+            } else if (type === 'milestone') {
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(440, now);
+                osc.frequency.setValueAtTime(660, now + 0.1);
+                osc.frequency.setValueAtTime(880, now + 0.2);
+                gainNode.gain.setValueAtTime(0.2, now);
+                gainNode.gain.linearRampToValueAtTime(0, now + 0.4);
+                osc.start(now);
+                osc.stop(now + 0.4);
+            }
+        }
+
+        // --- Game State Variables ---
+        let scale = 1;
+        let groundY = 0;
+        let baseSpeed = 400; // pixels per second (base)
+        let GAME_SPEED = baseSpeed;
+        let score = 0;
+        let highScore = localStorage.getItem('horseRunnerHighScore') || 0;
+        let isGameOver = false;
+        let gameStarted = false;
+        let lastTime = performance.now();
+        let animationId;
+        let nextMilestone = 500;
+        let obstacleSpawnTimer = 0;
+
+        highScoreDisplay.textContent = `High Score: ${Math.floor(highScore)}`;
+
+        // --- Entities ---
+        const horse = {
+            x: 50,
+            y: 0,
+            width: 60,
+            height: 50,
+            vy: 0,
+            gravity: 2000,     // pixels per second squared
+            jumpStrength: -800, // pixels per second
+            isJumping: false,
+            runFrame: 0,
+            animationTimer: 0
+        };
+
+        const obstacles = [];
+        const clouds = [];
+
+        // --- Initialization & Resizing ---
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            
+            // Adjust scale based on screen width relative to a reference width of 800
+            scale = Math.min(canvas.width / 800, canvas.height / 600);
+            if (scale < 0.5) scale = 0.5; // Prevent becoming unplayably small
+            if (scale > 1.5) scale = 1.5; // Prevent becoming way too huge
+
+            groundY = canvas.height - 100 * scale;
+            
+            // Reposition horse correctly after resize
+            if (horse.y === 0 || !horse.isJumping) {
+                horse.y = groundY - horse.height * scale;
+            }
+            horse.x = 80 * scale;
+            
+            if(!gameStarted) {
+                drawStartScreen(); // Redraw start screen if suspended
+            }
+        }
+
+        window.addEventListener('resize', resize);
+        resize();
+
+        // --- Spawners ---
+        function spawnObstacle() {
+            const types = ['rock', 'bush', 'crate'];
+            const type = types[Math.floor(Math.random() * types.length)];
+            let width, height;
+
+            if (type === 'rock') {
+                width = 30 + Math.random() * 20;
+                height = 20 + Math.random() * 15;
+            } else if (type === 'bush') {
+                width = 40 + Math.random() * 30;
+                height = 30 + Math.random() * 20;
+            } else if (type === 'crate') {
+                width = 40;
+                height = 40;
+            }
+
+            obstacles.push({
+                x: canvas.width,
+                width: width,
+                height: height,
+                type: type,
+                passed: false // For scoring if we wanted per-obstacle scoring later
+            });
+        }
+
+        function createCloud(startX) {
+            clouds.push({
+                x: startX !== undefined ? startX : canvas.width,
+                y: Math.random() * (canvas.height / 2),
+                width: 60 + Math.random() * 80,
+                speed: 20 + Math.random() * 40 // pixels per second
+            });
+        }
+
+        // Initial clouds
+        for(let i=0; i<6; i++) {
+            createCloud(Math.random() * canvas.width);
+        }
+
+        // --- Input Handling ---
+        function jump() {
+            if (!gameStarted) {
+                startGame();
+                return;
+            }
+            
+            if (!horse.isJumping && !isGameOver) {
+                playSound('jump');
+                horse.vy = horse.jumpStrength * scale;
+                horse.isJumping = true;
+            }
+        }
+
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') {
+                e.preventDefault(); // Prevent scrolling
+                if (isGameOver) {
+                    resetGame();
+                } else {
+                    jump();
+                }
+            }
+        });
+
+        // Touch handling (passive: false to prevent scroll)
+        window.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (isGameOver) {
+                // If touching the game over button, let it handle the click
+                if(e.target === restartBtn) return;
+                resetGame();
+            } else {
+                jump();
+            }
+        }, {passive: false});
+
+        canvas.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+             if (!isGameOver) {
+                jump();
+            }
+        });
+
+        restartBtn.addEventListener('click', () => {
+             resetGame();
+        });
+        
+        // Touch end for button on mobile to ensure it fires smoothly
+        restartBtn.addEventListener('touchend', (e) => {
+             e.preventDefault();
+             resetGame();
+        });
+
+        // --- Game Loop Management ---
+        function startGame() {
+            if(!gameStarted) {
+                gameStarted = true;
+                if (audioCtx.state === 'suspended') {
+                    audioCtx.resume();
+                }
+                lastTime = performance.now();
+                update(lastTime);
+            }
+        }
+
+        function resetGame() {
+            isGameOver = false;
+            score = 0;
+            GAME_SPEED = baseSpeed;
+            nextMilestone = 500;
+            obstacles.length = 0;
+            horse.y = groundY - horse.height * scale;
+            horse.vy = 0;
+            horse.isJumping = false;
+            gameOverScreen.style.display = 'none';
+            scoreDisplay.style.color = 'white';
+            lastTime = performance.now();
+            obstacleSpawnTimer = 0;
+            update(lastTime);
+        }
+
+        // --- Drawing Codes ---
+        function drawStartScreen() {
+            render(); // draw background
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.fillRect(0,0,canvas.width,canvas.height);
+            ctx.fillStyle = 'white';
+            ctx.font = `bold ${30 * scale}px 'Segoe UI', sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.fillText("Press Space or Tap screen to start playing!", canvas.width/2, canvas.height/2);
+            ctx.textAlign = 'left';
+        }
+
+        function drawHorse(ctx, x, y, width, height, scale, isJumping, runFrame) {
+            ctx.save();
+            ctx.translate(x, y);
+            
+            // Body parts sizes are relative to the 60x50 base size
+            const sx = scale; 
+
+            // Body
+            ctx.fillStyle = '#8B4513'; // SaddleBrown
+            ctx.beginPath();
+            ctx.roundRect(10 * sx, 15 * sx, 40 * sx, 25 * sx, 10 * sx);
+            ctx.fill();
+
+            // Head and neck
+            ctx.beginPath();
+            ctx.moveTo(35 * sx, 20 * sx);
+            ctx.lineTo(45 * sx, 5 * sx);
+            ctx.lineTo(55 * sx, 5 * sx);
+            ctx.lineTo(60 * sx, 15 * sx);
+            ctx.lineTo(50 * sx, 20 * sx);
+            ctx.fill();
+
+            // Snout
+            ctx.beginPath();
+            ctx.fillStyle = '#A0522D'; // Sienna
+            ctx.roundRect(50 * sx, 10 * sx, 15 * sx, 8 * sx, 3 * sx);
+            ctx.fill();
+            
+            // Eye
+            ctx.fillStyle = 'black';
+            ctx.beginPath();
+            ctx.arc(53 * sx, 7 * sx, 2 * sx, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Ear
+            ctx.fillStyle = '#8B4513';
+            ctx.beginPath();
+            ctx.moveTo(48*sx, 5*sx);
+            ctx.lineTo(52*sx, 0);
+            ctx.lineTo(54*sx, 5*sx);
+            ctx.fill();
+
+            // Legs
+            ctx.fillStyle = '#5C4033'; // Dark brown
+            // Animation logic for legs
+            let legRot1 = 0, legRot2 = 0, legRot3 = 0, legRot4 = 0;
+
+            if (isJumping) {
+                legRot1 = -0.5; legRot2 = -0.7;
+                legRot3 = 0.5;  legRot4 = 0.3;
+            } else {
+                let cycle = Math.sin(runFrame * 0.5);
+                legRot1 = cycle * 0.8;
+                legRot2 = -cycle * 0.8;
+                legRot3 = -cycle * 0.8;
+                legRot4 = cycle * 0.8;
+            }
+
+            // Draw leg helper
+            function drawLeg(lx, ly, rot, isBack) {
+                ctx.save();
+                ctx.translate(lx, ly);
+                ctx.rotate(rot);
+                ctx.fillStyle = isBack ? '#3E2723' : '#5C4033'; // Darker for back legs
+                ctx.fillRect(-3 * sx, 0, 6 * sx, 18 * sx);
+                ctx.restore();
+            }
+
+            // Back-layer Legs (drawn first)
+            drawLeg(48 * sx, 35 * sx, legRot2, true); // Front back-leg
+            drawLeg(23 * sx, 35 * sx, legRot4, true); // Back back-leg
+            
+            // Front-layer Legs (drawn second)
+            drawLeg(40 * sx, 35 * sx, legRot1, false); // Front front-leg
+            drawLeg(15 * sx, 35 * sx, legRot3, false); // Back front-leg
+
+            // Tail
+            ctx.strokeStyle = '#3E2723';
+            ctx.lineWidth = 4 * sx;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.moveTo(12 * sx, 20 * sx);
+            
+            if(isJumping) {
+                 ctx.quadraticCurveTo(0, 15 * sx, -5 * sx, 30 * sx);
+            } else {
+                 ctx.quadraticCurveTo(5 * sx, 25 * sx, -2 * sx, 35 * sx + Math.sin(runFrame)*8*sx);
+            }
+            ctx.stroke();
+
+            // Mane
+            ctx.strokeStyle = '#3E2723';
+            ctx.lineWidth = 3 * sx;
+            ctx.beginPath();
+            ctx.moveTo(45 * sx, 5 * sx);
+            ctx.lineTo(38 * sx, 12 * sx);
+            ctx.moveTo(48 * sx, 8 * sx);
+            ctx.lineTo(40 * sx, 15 * sx);
+            ctx.stroke();
+
+            ctx.restore();
+        }
+
+        function drawObstacle(ctx, obs) {
+            ctx.save();
+            ctx.translate(obs.x, groundY - obs.height * scale);
+            
+            const sx = scale;
+            const w = obs.width * sx;
+            const h = obs.height * sx;
+
+            if (obs.type === 'rock') {
+                ctx.fillStyle = '#808080';
+                ctx.beginPath();
+                ctx.moveTo(0, h);
+                ctx.lineTo(w * 0.2, h * 0.2);
+                ctx.lineTo(w * 0.5, 0);
+                ctx.lineTo(w * 0.8, h * 0.3);
+                ctx.lineTo(w, h);
+                ctx.fill();
+                
+                // Rock shadow/detail
+                ctx.fillStyle = '#696969';
+                ctx.beginPath();
+                ctx.moveTo(w*0.5, 0);
+                ctx.lineTo(w*0.8, h*0.3);
+                ctx.lineTo(w, h);
+                ctx.lineTo(w*0.7, h);
+                ctx.lineTo(w*0.4, h*0.5);
+                ctx.fill();
+
+            } else if (obs.type === 'bush') {
+                ctx.fillStyle = '#2E7D32';
+                ctx.beginPath();
+                ctx.arc(w*0.25, h*0.6, w*0.25, 0, Math.PI*2);
+                ctx.arc(w*0.75, h*0.6, w*0.25, 0, Math.PI*2);
+                ctx.arc(w*0.5, h*0.3, w*0.3, 0, Math.PI*2);
+                ctx.fill();
+                
+                // Bush highlight
+                ctx.fillStyle = '#4CAF50';
+                ctx.beginPath();
+                ctx.arc(w*0.4, h*0.25, w*0.15, 0, Math.PI*2);
+                ctx.fill();
+
+            } else if (obs.type === 'crate') {
+                ctx.fillStyle = '#D2B48C'; // Tan
+                ctx.fillRect(0, 0, w, h);
+                ctx.strokeStyle = '#8B4513'; // SaddleBrown
+                ctx.lineWidth = 3 * sx;
+                ctx.strokeRect(0, 0, w, h);
+                
+                // Crate diagonal planks
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(w, h);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(w, 0);
+                ctx.lineTo(0, h);
+                ctx.stroke();
+            }
+
+            ctx.restore();
+        }
+
+        function drawCloud(ctx, cloud) {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+            ctx.beginPath();
+            const r = cloud.width * 0.25;
+            ctx.arc(cloud.x + r, cloud.y + r, r, Math.PI * 0.5, Math.PI * 1.5);
+            ctx.arc(cloud.x + cloud.width * 0.5, cloud.y, r * 1.2, Math.PI, Math.PI * 2);
+            ctx.arc(cloud.x + cloud.width - r, cloud.y + r, r, Math.PI * 1.5, Math.PI * 0.5);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        // --- Core Engine logic ---
+        function checkCollision(obs) {
+            // Hitboxes (scaled, made slightly smaller and tighter for fairer gameplay)
+            const sx = scale;
+            // The horse's visible rectangle is roughly inside x + 10*sx, width 40*sx, y + 10*sx, height 35*sx
+            const hx = horse.x + 10 * sx;
+            const hy = horse.y + 10 * sx;
+            const hw = 40 * sx; 
+            const hh = 35 * sx;
+            
+            // Adjust obstacle hitboxes slightly for fairness
+            let ox = obs.x;
+            let oy = groundY - obs.height * sx;
+            let ow = obs.width * sx;
+            let oh = obs.height * sx;
+
+            if (obs.type === 'rock') {
+                // Triangle roughly, shrink bounding box
+                ox += ow * 0.2;
+                ow *= 0.6;
+                oy += oh * 0.2;
+                oh *= 0.8;
+            } else if (obs.type === 'bush') {
+                // Round shape, shrink bounding box
+                ox += ow * 0.1;
+                ow *= 0.8;
+                oy += oh * 0.1;
+                oh *= 0.9;
+            }
+
+            // Simple Axis-Aligned Bounding Box (AABB) collision
+            if (hx + hw > ox &&
+                hx < ox + ow &&
+                hy + hh > oy &&
+                hy < oy + oh) {
+                return true;
+            }
+            return false;
+        }
+
+        function update(now) {
+            if (isGameOver) return;
+
+            // Delta time formulation independent of frame rate
+            const dt = (now - lastTime) / 1000; 
+            lastTime = now;
+
+            // If dt is huge (e.g. tab was inactive), cap it so game doesn't break
+            if (dt > 0.1) {
+                animationId = requestAnimationFrame(update);
+                return;
+            }
+
+            // Update Score System
+            score += (dt * 10); // 10 points per second base, we scale it
+            // Adjust score calculation roughly to 60 points per "game second" relative to base speed
+            let scoreIncrement = 60 * dt * (GAME_SPEED / baseSpeed);
+            score += scoreIncrement;
+            scoreDisplay.textContent = `Score: ${Math.floor(score)}`;
+            
+            if (score >= nextMilestone) {
+                playSound('milestone');
+                GAME_SPEED += 50; // Increase speed
+                nextMilestone += 500;
+                
+                // Visual feedback for milestone
+                scoreDisplay.style.color = 'gold';
+                scoreDisplay.style.transform = 'scale(1.2)';
+                scoreDisplay.style.transition = 'transform 0.2s';
+                setTimeout(() => {
+                    scoreDisplay.style.color = 'white';
+                    scoreDisplay.style.transform = 'scale(1)';
+                }, 500);
+            }
+
+            // Update Horse Physics
+            horse.vy += horse.gravity * scale * dt;
+            horse.y += horse.vy * dt;
+
+            // Ground Collision
+            const maxHorseY = groundY - horse.height * scale;
+            if (horse.y >= maxHorseY) {
+                horse.y = maxHorseY;
+                horse.isJumping = false;
+                horse.vy = 0;
+            }
+
+            // Update Animation Frames based on movement speed
+            horse.animationTimer += dt * (GAME_SPEED / baseSpeed);
+            if (horse.animationTimer > 0.08) {
+                horse.animationTimer = 0;
+                horse.runFrame++;
+            }
+
+            // Update Clouds
+            clouds.forEach(cloud => {
+                cloud.x -= cloud.speed * scale * dt;
+            });
+            // Recycle clouds
+            for (let i = clouds.length - 1; i >= 0; i--) {
+                if (clouds[i].x + clouds[i].width < 0) {
+                    clouds.splice(i, 1);
+                    createCloud(); // Spawn new cloud
+                }
+            }
+
+            // Update Obstacles & Spawning
+            obstacleSpawnTimer -= dt;
+            if (obstacleSpawnTimer <= 0) {
+                spawnObstacle();
+                // Random time between 1 and 2.5 seconds, adjusted by speed
+                let minTime = 1.0 / (GAME_SPEED / baseSpeed);
+                let maxTime = 2.5 / (GAME_SPEED / baseSpeed);
+                obstacleSpawnTimer = minTime + Math.random() * (maxTime - minTime);
+            }
+
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                let obs = obstacles[i];
+                obs.x -= GAME_SPEED * scale * dt;
+
+                if (checkCollision(obs)) {
+                    // Collision Detected -> Game Over
+                    playSound('crash');
+                    isGameOver = true;
+                    if (score > highScore) {
+                        highScore = score;
+                        localStorage.setItem('horseRunnerHighScore', highScore);
+                        highScoreDisplay.textContent = `High Score: ${Math.floor(highScore)}`;
+                    }
+                    gameOverScreen.style.display = 'flex';
+                }
+
+                // Cleanup Off-screen Obstacles
+                if (obs.x + obs.width * scale < 0) {
+                    obstacles.splice(i, 1);
+                }
+            }
+
+            render();
+            
+            if (!isGameOver) {
+                animationId = requestAnimationFrame(update);
+            }
+        }
+
+        function render() {
+            // 1. Draw Background Sky
+            ctx.fillStyle = '#87CEEB'; // Sky blue
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 2. Draw Clouds
+            clouds.forEach(cloud => drawCloud(ctx, cloud));
+
+            // 3. Draw Ground background
+            ctx.fillStyle = '#8B4513'; // Dirt layer
+            ctx.fillRect(0, groundY + 20 * scale, canvas.width, canvas.height - groundY - 20 * scale);
+            
+            // Draw Grass layer
+            ctx.fillStyle = '#4CAF50'; 
+            ctx.fillRect(0, groundY, canvas.width, 20 * scale);
+
+            // 4. Parallax effect for grass texture (Moving lines)
+            ctx.strokeStyle = '#388E3C';
+            ctx.lineWidth = 3 * scale;
+            ctx.beginPath();
+            // Calculate an offset based on total distance traveled
+            // Distance = Speed * time. Score roughly correlates, or we can just use a rolling accumulator
+            let shift = (score * scale * 10) % (40 * scale);
+            for(let i = -shift; i < canvas.width; i += 40 * scale) {
+                ctx.moveTo(i, groundY + 5 * scale);
+                ctx.lineTo(i + 15 * scale, groundY + 15 * scale);
+            }
+            ctx.stroke();
+
+            // 5. Draw Obstacles (Back to Front)
+            obstacles.forEach(obs => drawObstacle(ctx, obs));
+
+            // 6. Draw Horse
+            drawHorse(ctx, horse.x, horse.y, horse.width * scale, horse.height * scale, scale, horse.isJumping, horse.runFrame);
+        }
+
+        // --- Boot sequence ---
+        // Just draw initial state without starting game loop
+        if(!gameStarted) {
+            drawStartScreen();
+        }
+
+    </script>
+</body>
+</html>
