@@ -35,6 +35,13 @@
             pointer-events: none;
             z-index: 10;
         }
+        #branding {
+            font-size: 14px;
+            font-weight: normal;
+            font-family: Arial, sans-serif;
+            opacity: 0.7;
+            margin-top: 5px;
+        }
         #gameOverScreen {
             position: absolute;
             top: 0;
@@ -76,6 +83,9 @@
             #ui {
                 font-size: 18px;
             }
+            #branding {
+                font-size: 12px;
+            }
             #gameOverScreen h1 {
                 font-size: 32px;
             }
@@ -88,7 +98,10 @@
 </head>
 <body>
     <div id="ui">
-        <div id="scoreDisplay">Score: 0</div>
+        <div style="display:flex; flex-direction:column; align-items: flex-start;">
+            <div id="scoreDisplay">Score: 0</div>
+            <div id="branding">Made by Trilok Jha</div>
+        </div>
         <div id="highScoreDisplay">High Score: 0</div>
     </div>
     
@@ -148,6 +161,15 @@
                 gainNode.gain.linearRampToValueAtTime(0, now + 0.4);
                 osc.start(now);
                 osc.stop(now + 0.4);
+            } else if (type === 'coin') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(987.77, now); // B5 note
+                osc.frequency.setValueAtTime(1318.51, now + 0.1); // E6 note
+                gainNode.gain.setValueAtTime(0, now);
+                gainNode.gain.linearRampToValueAtTime(0.3, now + 0.05);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+                osc.start(now);
+                osc.stop(now + 0.3);
             }
         }
 
@@ -160,10 +182,14 @@
         let highScore = localStorage.getItem('horseRunnerHighScore') || 0;
         let isGameOver = false;
         let gameStarted = false;
+        let isNight = false;
         let lastTime = performance.now();
         let animationId;
         let nextMilestone = 500;
+        
+        // Spawners timers
         let obstacleSpawnTimer = 0;
+        let coinSpawnTimer = 0;
 
         highScoreDisplay.textContent = `High Score: ${Math.floor(highScore)}`;
 
@@ -183,6 +209,19 @@
 
         const obstacles = [];
         const clouds = [];
+        const coins = [];
+        const stars = [];
+
+        // Initialize Stars directly
+        for(let i=0; i<60; i++) {
+            stars.push({
+                // Random position across an assumed max screen width, we'll wrap them
+                x: Math.random() * 2000, 
+                y: Math.random() * 400,
+                r: Math.random() * 1.5 + 0.5,
+                alpha: Math.random()
+            });
+        }
 
         // --- Initialization & Resizing ---
         function resize() {
@@ -231,17 +270,31 @@
                 x: canvas.width,
                 width: width,
                 height: height,
-                type: type,
-                passed: false // For scoring if we wanted per-obstacle scoring later
+                type: type
             });
         }
 
         function createCloud(startX) {
             clouds.push({
-                x: startX !== undefined ? startX : canvas.width,
+                x: startX !== undefined ? startX : canvas.width + Math.random() * 200,
                 y: Math.random() * (canvas.height / 2),
                 width: 60 + Math.random() * 80,
                 speed: 20 + Math.random() * 40 // pixels per second
+            });
+        }
+
+        function spawnCoin() {
+            // Spawn coin at a random heights reachable by jumping
+            let minHeight = groundY - 20 * scale; 
+            let maxHeight = groundY - 160 * scale; // Higher up
+            let spawnY = maxHeight + Math.random() * (minHeight - maxHeight);
+            
+            coins.push({
+                x: canvas.width,
+                y: spawnY,
+                width: 20 * scale,
+                height: 20 * scale,
+                frame: Math.random() * Math.PI * 2 // Starting frame for rotation animation
             });
         }
 
@@ -279,7 +332,6 @@
         window.addEventListener('touchstart', (e) => {
             e.preventDefault();
             if (isGameOver) {
-                // If touching the game over button, let it handle the click
                 if(e.target === restartBtn) return;
                 resetGame();
             } else {
@@ -298,7 +350,6 @@
              resetGame();
         });
         
-        // Touch end for button on mobile to ensure it fires smoothly
         restartBtn.addEventListener('touchend', (e) => {
              e.preventDefault();
              resetGame();
@@ -321,14 +372,22 @@
             score = 0;
             GAME_SPEED = baseSpeed;
             nextMilestone = 500;
+            isNight = false;
+            
             obstacles.length = 0;
+            coins.length = 0;
+            
             horse.y = groundY - horse.height * scale;
             horse.vy = 0;
             horse.isJumping = false;
+            
             gameOverScreen.style.display = 'none';
             scoreDisplay.style.color = 'white';
+            
             lastTime = performance.now();
             obstacleSpawnTimer = 0;
+            coinSpawnTimer = 0;
+            
             update(lastTime);
         }
 
@@ -340,7 +399,7 @@
             ctx.fillStyle = 'white';
             ctx.font = `bold ${30 * scale}px 'Segoe UI', sans-serif`;
             ctx.textAlign = 'center';
-            ctx.fillText("Press Space or Tap screen to start playing!", canvas.width/2, canvas.height/2);
+            ctx.fillText("Press Space or Tap screen to start!", canvas.width/2, canvas.height/2);
             ctx.textAlign = 'left';
         }
 
@@ -348,7 +407,6 @@
             ctx.save();
             ctx.translate(x, y);
             
-            // Body parts sizes are relative to the 60x50 base size
             const sx = scale; 
 
             // Body
@@ -456,7 +514,7 @@
             const h = obs.height * sx;
 
             if (obs.type === 'rock') {
-                ctx.fillStyle = '#808080';
+                ctx.fillStyle = isNight ? '#505050' : '#808080';
                 ctx.beginPath();
                 ctx.moveTo(0, h);
                 ctx.lineTo(w * 0.2, h * 0.2);
@@ -466,7 +524,7 @@
                 ctx.fill();
                 
                 // Rock shadow/detail
-                ctx.fillStyle = '#696969';
+                ctx.fillStyle = isNight ? '#3A3A3A' : '#696969';
                 ctx.beginPath();
                 ctx.moveTo(w*0.5, 0);
                 ctx.lineTo(w*0.8, h*0.3);
@@ -476,7 +534,7 @@
                 ctx.fill();
 
             } else if (obs.type === 'bush') {
-                ctx.fillStyle = '#2E7D32';
+                ctx.fillStyle = isNight ? '#1E5622' : '#2E7D32';
                 ctx.beginPath();
                 ctx.arc(w*0.25, h*0.6, w*0.25, 0, Math.PI*2);
                 ctx.arc(w*0.75, h*0.6, w*0.25, 0, Math.PI*2);
@@ -484,15 +542,15 @@
                 ctx.fill();
                 
                 // Bush highlight
-                ctx.fillStyle = '#4CAF50';
+                ctx.fillStyle = isNight ? '#2E7D32' : '#4CAF50';
                 ctx.beginPath();
                 ctx.arc(w*0.4, h*0.25, w*0.15, 0, Math.PI*2);
                 ctx.fill();
 
             } else if (obs.type === 'crate') {
-                ctx.fillStyle = '#D2B48C'; // Tan
+                ctx.fillStyle = isNight ? '#8B7355' : '#D2B48C'; // Tan
                 ctx.fillRect(0, 0, w, h);
-                ctx.strokeStyle = '#8B4513'; // SaddleBrown
+                ctx.strokeStyle = isNight ? '#5C3317' : '#8B4513'; // SaddleBrown
                 ctx.lineWidth = 3 * sx;
                 ctx.strokeRect(0, 0, w, h);
                 
@@ -511,7 +569,7 @@
         }
 
         function drawCloud(ctx, cloud) {
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+            ctx.fillStyle = isNight ? 'rgba(70, 80, 100, 0.7)' : 'rgba(255, 255, 255, 0.9)';
             ctx.beginPath();
             const r = cloud.width * 0.25;
             ctx.arc(cloud.x + r, cloud.y + r, r, Math.PI * 0.5, Math.PI * 1.5);
@@ -521,69 +579,95 @@
             ctx.fill();
         }
 
+        function drawCoin(ctx, coin) {
+            ctx.save();
+            // Center of the coin for rotation/scaling
+            ctx.translate(coin.x + coin.width / 2, coin.y + coin.height / 2);
+            
+            // Coin spinning effect using horizontal scale
+            let rotScaleX = Math.abs(Math.cos(coin.frame));
+            if (rotScaleX < 0.1) rotScaleX = 0.1; // Minimum width so it doesn't entirely vanish
+            
+            ctx.scale(rotScaleX, 1);
+            
+            // Main Gold circular base
+            ctx.fillStyle = '#FFD700'; // Gold
+            ctx.beginPath();
+            ctx.arc(0, 0, coin.width / 2, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Outer darker ring
+            ctx.strokeStyle = '#DAA520'; // Goldenrod
+            ctx.lineWidth = 2 * scale;
+            ctx.stroke();
+            
+            // Inner decorative ring
+            ctx.beginPath();
+            ctx.arc(0, 0, coin.width / 3.5, 0, Math.PI * 2);
+            ctx.stroke();
+
+            ctx.restore();
+        }
+
         // --- Core Engine logic ---
         function checkCollision(obs) {
-            // Hitboxes (scaled, made slightly smaller and tighter for fairer gameplay)
             const sx = scale;
-            // The horse's visible rectangle is roughly inside x + 10*sx, width 40*sx, y + 10*sx, height 35*sx
             const hx = horse.x + 10 * sx;
             const hy = horse.y + 10 * sx;
             const hw = 40 * sx; 
             const hh = 35 * sx;
             
-            // Adjust obstacle hitboxes slightly for fairness
             let ox = obs.x;
             let oy = groundY - obs.height * sx;
             let ow = obs.width * sx;
             let oh = obs.height * sx;
 
             if (obs.type === 'rock') {
-                // Triangle roughly, shrink bounding box
-                ox += ow * 0.2;
-                ow *= 0.6;
-                oy += oh * 0.2;
-                oh *= 0.8;
+                ox += ow * 0.2; ow *= 0.6; oy += oh * 0.2; oh *= 0.8;
             } else if (obs.type === 'bush') {
-                // Round shape, shrink bounding box
-                ox += ow * 0.1;
-                ow *= 0.8;
-                oy += oh * 0.1;
-                oh *= 0.9;
+                ox += ow * 0.1; ow *= 0.8; oy += oh * 0.1; oh *= 0.9;
             }
 
-            // Simple Axis-Aligned Bounding Box (AABB) collision
-            if (hx + hw > ox &&
-                hx < ox + ow &&
-                hy + hh > oy &&
-                hy < oy + oh) {
-                return true;
-            }
-            return false;
+            return (hx + hw > ox && hx < ox + ow && hy + hh > oy && hy < oy + oh);
+        }
+
+        function checkCoinCollision(coin) {
+            const sx = scale;
+            const hx = horse.x;
+            const hy = horse.y;
+            const hw = 60 * sx; 
+            const hh = 50 * sx;
+            
+            const cx = coin.x;
+            const cy = coin.y;
+            const cw = coin.width;
+            const ch = coin.height;
+
+            return (hx + hw > cx && hx < cx + cw && hy + hh > cy && hy < cy + ch);
         }
 
         function update(now) {
             if (isGameOver) return;
 
-            // Delta time formulation independent of frame rate
             const dt = (now - lastTime) / 1000; 
             lastTime = now;
 
-            // If dt is huge (e.g. tab was inactive), cap it so game doesn't break
             if (dt > 0.1) {
                 animationId = requestAnimationFrame(update);
-                return;
+                return; // Prevent extreme jumps on tab resume
             }
 
             // Update Score System
-            score += (dt * 10); // 10 points per second base, we scale it
-            // Adjust score calculation roughly to 60 points per "game second" relative to base speed
             let scoreIncrement = 60 * dt * (GAME_SPEED / baseSpeed);
             score += scoreIncrement;
             scoreDisplay.textContent = `Score: ${Math.floor(score)}`;
             
+            // Cycle day/night every 1000 points
+            isNight = Math.floor(score / 1000) % 2 === 1;
+            
             if (score >= nextMilestone) {
                 playSound('milestone');
-                GAME_SPEED += 50; // Increase speed
+                GAME_SPEED += 50; // Increase difficulty
                 nextMilestone += 500;
                 
                 // Visual feedback for milestone
@@ -608,7 +692,6 @@
                 horse.vy = 0;
             }
 
-            // Update Animation Frames based on movement speed
             horse.animationTimer += dt * (GAME_SPEED / baseSpeed);
             if (horse.animationTimer > 0.08) {
                 horse.animationTimer = 0;
@@ -619,19 +702,29 @@
             clouds.forEach(cloud => {
                 cloud.x -= cloud.speed * scale * dt;
             });
-            // Recycle clouds
             for (let i = clouds.length - 1; i >= 0; i--) {
                 if (clouds[i].x + clouds[i].width < 0) {
                     clouds.splice(i, 1);
-                    createCloud(); // Spawn new cloud
+                    createCloud();
                 }
+            }
+
+            // Update Stars (Night Mode parallax)
+            if (isNight) {
+                stars.forEach(star => {
+                    star.x -= GAME_SPEED * scale * dt * 0.1; // slow background movement
+                    // Twinkling effect
+                    star.alpha += (Math.random() - 0.5) * 0.05;
+                    star.alpha = Math.max(0.1, Math.min(1, star.alpha));
+                    
+                    if (star.x < 0) star.x = canvas.width;
+                });
             }
 
             // Update Obstacles & Spawning
             obstacleSpawnTimer -= dt;
             if (obstacleSpawnTimer <= 0) {
                 spawnObstacle();
-                // Random time between 1 and 2.5 seconds, adjusted by speed
                 let minTime = 1.0 / (GAME_SPEED / baseSpeed);
                 let maxTime = 2.5 / (GAME_SPEED / baseSpeed);
                 obstacleSpawnTimer = minTime + Math.random() * (maxTime - minTime);
@@ -642,7 +735,6 @@
                 obs.x -= GAME_SPEED * scale * dt;
 
                 if (checkCollision(obs)) {
-                    // Collision Detected -> Game Over
                     playSound('crash');
                     isGameOver = true;
                     if (score > highScore) {
@@ -653,9 +745,38 @@
                     gameOverScreen.style.display = 'flex';
                 }
 
-                // Cleanup Off-screen Obstacles
                 if (obs.x + obs.width * scale < 0) {
                     obstacles.splice(i, 1);
+                }
+            }
+            
+            // Update Coins & Spawning
+            coinSpawnTimer -= dt;
+            if (coinSpawnTimer <= 0) {
+                spawnCoin();
+                let minTime = 0.5 / (GAME_SPEED / baseSpeed);
+                let maxTime = 2.0 / (GAME_SPEED / baseSpeed);
+                coinSpawnTimer = minTime + Math.random() * (maxTime - minTime);
+            }
+
+            for (let i = coins.length - 1; i >= 0; i--) {
+                let coin = coins[i];
+                coin.x -= GAME_SPEED * scale * dt;
+                coin.frame += dt * 6; // Controls spin speed
+
+                if (checkCoinCollision(coin)) {
+                    playSound('coin');
+                    score += 50;
+                    coins.splice(i, 1);
+                    
+                    // Small flash of gold to acknowledge hit
+                    scoreDisplay.style.color = 'gold';
+                    setTimeout(() => scoreDisplay.style.color = 'white', 200);
+                    continue;
+                }
+
+                if (coin.x + coin.width < 0) {
+                    coins.splice(i, 1);
                 }
             }
 
@@ -668,26 +789,40 @@
 
         function render() {
             // 1. Draw Background Sky
-            ctx.fillStyle = '#87CEEB'; // Sky blue
+            ctx.fillStyle = isNight ? '#0B0C10' : '#87CEEB';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            if (isNight) {
+                // Draw stars
+                stars.forEach(star => {
+                    ctx.fillStyle = `rgba(255, 255, 255, ${star.alpha})`;
+                    ctx.beginPath();
+                    ctx.arc(star.x, star.y, star.r * scale, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+                
+                // Draw Moon
+                ctx.fillStyle = '#FFF8DC'; // Cornsilk / pale yellow
+                ctx.beginPath();
+                ctx.arc(canvas.width * 0.8, canvas.height * 0.2, 40 * scale, 0, Math.PI * 2);
+                ctx.fill();
+            }
 
             // 2. Draw Clouds
             clouds.forEach(cloud => drawCloud(ctx, cloud));
 
             // 3. Draw Ground background
-            ctx.fillStyle = '#8B4513'; // Dirt layer
+            ctx.fillStyle = isNight ? '#3E2723' : '#8B4513'; // Dirt layer (darker at night)
             ctx.fillRect(0, groundY + 20 * scale, canvas.width, canvas.height - groundY - 20 * scale);
             
             // Draw Grass layer
-            ctx.fillStyle = '#4CAF50'; 
+            ctx.fillStyle = isNight ? '#1B5E20' : '#4CAF50'; 
             ctx.fillRect(0, groundY, canvas.width, 20 * scale);
 
-            // 4. Parallax effect for grass texture (Moving lines)
-            ctx.strokeStyle = '#388E3C';
+            // 4. Parallax effect for grass texture
+            ctx.strokeStyle = isNight ? '#0A2E0C' : '#388E3C';
             ctx.lineWidth = 3 * scale;
             ctx.beginPath();
-            // Calculate an offset based on total distance traveled
-            // Distance = Speed * time. Score roughly correlates, or we can just use a rolling accumulator
             let shift = (score * scale * 10) % (40 * scale);
             for(let i = -shift; i < canvas.width; i += 40 * scale) {
                 ctx.moveTo(i, groundY + 5 * scale);
@@ -697,13 +832,15 @@
 
             // 5. Draw Obstacles (Back to Front)
             obstacles.forEach(obs => drawObstacle(ctx, obs));
+            
+            // 6. Draw Collectible Coins
+            coins.forEach(coin => drawCoin(ctx, coin));
 
-            // 6. Draw Horse
+            // 7. Draw Horse
             drawHorse(ctx, horse.x, horse.y, horse.width * scale, horse.height * scale, scale, horse.isJumping, horse.runFrame);
         }
 
         // --- Boot sequence ---
-        // Just draw initial state without starting game loop
         if(!gameStarted) {
             drawStartScreen();
         }
