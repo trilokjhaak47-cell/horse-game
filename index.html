@@ -204,13 +204,16 @@
             jumpStrength: -800, // pixels per second
             isJumping: false,
             runFrame: 0,
-            animationTimer: 0
+            animationTimer: 0,
+            hasShield: false
         };
 
         const obstacles = [];
         const clouds = [];
         const coins = [];
         const stars = [];
+        const shields = [];
+        let nextShieldSpawnScore = 1500;
 
         // Initialize Stars directly
         for(let i=0; i<60; i++) {
@@ -233,7 +236,7 @@
             if (scale < 0.5) scale = 0.5; // Prevent becoming unplayably small
             if (scale > 1.5) scale = 1.5; // Prevent becoming way too huge
 
-            groundY = canvas.height - 100 * scale;
+            groundY = canvas.height * 0.7; // canvas.height - 100 * scale;
             
             // Reposition horse correctly after resize
             if (horse.y === 0 || !horse.isJumping) {
@@ -285,15 +288,15 @@
 
         function spawnCoin() {
             // Spawn coin at a random heights reachable by jumping
-            let minHeight = groundY - 20 * scale; 
+            let minHeight = groundY - 30 * scale; 
             let maxHeight = groundY - 160 * scale; // Higher up
             let spawnY = maxHeight + Math.random() * (minHeight - maxHeight);
             
             coins.push({
                 x: canvas.width,
                 y: spawnY,
-                width: 20 * scale,
-                height: 20 * scale,
+                width: 30 * scale, // 1.5x bigger
+                height: 30 * scale,
                 frame: Math.random() * Math.PI * 2 // Starting frame for rotation animation
             });
         }
@@ -376,8 +379,11 @@
             
             obstacles.length = 0;
             coins.length = 0;
+            shields.length = 0;
+            nextShieldSpawnScore = 1500;
             
             horse.y = groundY - horse.height * scale;
+            horse.hasShield = false;
             horse.vy = 0;
             horse.isJumping = false;
             
@@ -408,6 +414,18 @@
             ctx.translate(x, y);
             
             const sx = scale; 
+
+            // Shield glow
+            if (horse.hasShield) {
+                ctx.save();
+                ctx.fillStyle = 'rgba(135, 206, 250, 0.4)'; // LightSkyBlue aura
+                ctx.shadowColor = '#00BFFF';
+                ctx.shadowBlur = 15 * sx;
+                ctx.beginPath();
+                ctx.arc(30 * sx, 25 * sx, 45 * sx, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
 
             // Body
             ctx.fillStyle = '#8B4513'; // SaddleBrown
@@ -579,6 +597,38 @@
             ctx.fill();
         }
 
+        function drawShield(ctx, shield) {
+            ctx.save();
+            ctx.translate(shield.x + shield.width / 2, shield.y + shield.height / 2);
+            
+            const sx = scale;
+            
+            // Shield glow effect pulsating
+            ctx.globalAlpha = 0.5 + Math.abs(Math.sin(shield.frame)) * 0.5;
+            ctx.fillStyle = '#00BFFF'; // Deep sky blue
+            ctx.beginPath();
+            ctx.arc(0, 0, shield.width * 0.7, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Inner solid shield
+            ctx.globalAlpha = 1;
+            ctx.fillStyle = '#1E90FF'; // Dodger blue
+            ctx.beginPath();
+            ctx.moveTo(0, shield.height * 0.4);
+            ctx.lineTo(shield.width * 0.4, 0);
+            ctx.lineTo(shield.width * 0.4, -shield.height * 0.3);
+            ctx.lineTo(-shield.width * 0.4, -shield.height * 0.3);
+            ctx.lineTo(-shield.width * 0.4, 0);
+            ctx.closePath();
+            ctx.fill();
+            
+            ctx.strokeStyle = '#FFFFFF';
+            ctx.lineWidth = 2 * sx;
+            ctx.stroke();
+            
+            ctx.restore();
+        }
+
         function drawCoin(ctx, coin) {
             ctx.save();
             // Center of the coin for rotation/scaling
@@ -735,21 +785,58 @@
                 obs.x -= GAME_SPEED * scale * dt;
 
                 if (checkCollision(obs)) {
-                    playSound('crash');
-                    isGameOver = true;
-                    if (score > highScore) {
-                        highScore = score;
-                        localStorage.setItem('horseRunnerHighScore', highScore);
-                        highScoreDisplay.textContent = `High Score: ${Math.floor(highScore)}`;
+                    if (horse.hasShield) {
+                        playSound('crash');
+                        horse.hasShield = false;
+                        obstacles.splice(i, 1); // Break the obstacle
+                        continue;
+                    } else {
+                        playSound('crash');
+                        isGameOver = true;
+                        if (score > highScore) {
+                            highScore = score;
+                            localStorage.setItem('horseRunnerHighScore', highScore);
+                            highScoreDisplay.textContent = `High Score: ${Math.floor(highScore)}`;
+                        }
+                        gameOverScreen.style.display = 'flex';
                     }
-                    gameOverScreen.style.display = 'flex';
                 }
 
-                if (obs.x + obs.width * scale < 0) {
+                if (obs && obs.x + obs.width * scale < 0) {
                     obstacles.splice(i, 1);
                 }
             }
             
+            // Update Shields & Spawning
+            if (score >= nextShieldSpawnScore) {
+                shields.push({
+                    x: canvas.width,
+                    y: groundY - (50 + Math.random() * 50) * scale,
+                    width: 30 * scale,
+                    height: 30 * scale,
+                    frame: Math.random() * Math.PI * 2
+                });
+                nextShieldSpawnScore += 1500;
+            }
+            
+            for (let i = shields.length - 1; i >= 0; i--) {
+                let shield = shields[i];
+                shield.x -= GAME_SPEED * scale * dt;
+                shield.frame += dt * 3; // For floating/pulsating
+                shield.y += Math.sin(shield.frame) * scale;
+                
+                if (checkCoinCollision(shield)) { // Using same logic as coin for collision box
+                    playSound('milestone'); // sound for collecting shield
+                    horse.hasShield = true;
+                    shields.splice(i, 1);
+                    continue;
+                }
+                
+                if (shield.x + shield.width < 0) {
+                    shields.splice(i, 1);
+                }
+            }
+
             // Update Coins & Spawning
             coinSpawnTimer -= dt;
             if (coinSpawnTimer <= 0) {
@@ -835,6 +922,9 @@
             
             // 6. Draw Collectible Coins
             coins.forEach(coin => drawCoin(ctx, coin));
+            
+            // 6.5 Draw Shields
+            shields.forEach(shield => drawShield(ctx, shield));
 
             // 7. Draw Horse
             drawHorse(ctx, horse.x, horse.y, horse.width * scale, horse.height * scale, scale, horse.isJumping, horse.runFrame);
