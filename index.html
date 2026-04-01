@@ -100,9 +100,13 @@
     <div id="ui">
         <div style="display:flex; flex-direction:column; align-items: flex-start;">
             <div id="scoreDisplay">Score: 0</div>
-            <div id="branding">Made by Trilok Jha</div>
+            <div id="coinDisplay" style="color: #FFD700; font-size: 20px; margin-top: 5px; text-shadow: 1px 1px 2px black;">Coins: 0</div>
+            <div id="branding" style="margin-top: 5px;">Made by Trilok Jha</div>
         </div>
-        <div id="highScoreDisplay">High Score: 0</div>
+        <div style="display:flex; flex-direction:column; align-items: flex-end;">
+            <div id="highScoreDisplay">High Score: 0</div>
+            <div id="livesDisplay" style="font-size: 20px; margin-top: 5px; text-shadow: 1px 1px 2px black;">Lives: <span id="livesIcons"></span></div>
+        </div>
     </div>
     
     <div id="gameOverScreen">
@@ -116,7 +120,9 @@
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
         const scoreDisplay = document.getElementById('scoreDisplay');
+        const coinDisplay = document.getElementById('coinDisplay');
         const highScoreDisplay = document.getElementById('highScoreDisplay');
+        const livesDisplay = document.getElementById('livesIcons');
         const gameOverScreen = document.getElementById('gameOverScreen');
         const restartBtn = document.getElementById('restartBtn');
 
@@ -176,7 +182,7 @@
         // --- Game State Variables ---
         let scale = 1;
         let groundY = 0;
-        let baseSpeed = 400; // pixels per second (base)
+        let baseSpeed = 552; // Increased by another 15% (formerly 480)
         let GAME_SPEED = baseSpeed;
         let score = 0;
         let highScore = localStorage.getItem('horseRunnerHighScore') || 0;
@@ -185,13 +191,25 @@
         let isNight = false;
         let lastTime = performance.now();
         let animationId;
-        let nextMilestone = 500;
+        let nextMilestone = 2000;
+        
+        // Start with 0 Lives
+        let lives = 0;
+        const MAX_LIVES = 5;
+        let coinsCollected = 0;
         
         // Spawners timers
         let obstacleSpawnTimer = 0;
         let coinSpawnTimer = 0;
 
-        highScoreDisplay.textContent = `High Score: ${Math.floor(highScore)}`;
+        function updateUI() {
+            scoreDisplay.textContent = `Score: ${Math.floor(score)}`;
+            coinDisplay.textContent = `Coins: ${coinsCollected}`;
+            livesDisplay.textContent = '🐴'.repeat(lives);
+            if(lives === 0) livesDisplay.textContent = '0';
+            highScoreDisplay.textContent = `High Score: ${Math.floor(highScore)}`;
+        }
+        updateUI();
 
         // --- Entities ---
         const horse = {
@@ -205,20 +223,20 @@
             isJumping: false,
             runFrame: 0,
             animationTimer: 0,
-            hasShield: false
+            invincibleTimer: 0
         };
 
         const obstacles = [];
         const clouds = [];
         const coins = [];
         const stars = [];
-        const shields = [];
-        let nextShieldSpawnScore = 1500;
+        const extraLives = [];
+        let nextExtraLifeScore = 2500; // First life
+        let extraLifeGap = 2500;       // Initial gap
 
         // Initialize Stars directly
         for(let i=0; i<60; i++) {
             stars.push({
-                // Random position across an assumed max screen width, we'll wrap them
                 x: Math.random() * 2000, 
                 y: Math.random() * 400,
                 r: Math.random() * 1.5 + 0.5,
@@ -231,21 +249,19 @@
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
             
-            // Adjust scale based on screen width relative to a reference width of 800
             scale = Math.min(canvas.width / 800, canvas.height / 600);
-            if (scale < 0.5) scale = 0.5; // Prevent becoming unplayably small
-            if (scale > 1.5) scale = 1.5; // Prevent becoming way too huge
+            if (scale < 0.5) scale = 0.5; 
+            if (scale > 1.5) scale = 1.5;
 
-            groundY = canvas.height * 0.7; // canvas.height - 100 * scale;
+            groundY = canvas.height * 0.7;
             
-            // Reposition horse correctly after resize
             if (horse.y === 0 || !horse.isJumping) {
                 horse.y = groundY - horse.height * scale;
             }
             horse.x = 80 * scale;
             
             if(!gameStarted) {
-                drawStartScreen(); // Redraw start screen if suspended
+                drawStartScreen();
             }
         }
 
@@ -282,26 +298,24 @@
                 x: startX !== undefined ? startX : canvas.width + Math.random() * 200,
                 y: Math.random() * (canvas.height / 2),
                 width: 60 + Math.random() * 80,
-                speed: 20 + Math.random() * 40 // pixels per second
+                speed: 20 + Math.random() * 40
             });
         }
 
         function spawnCoin() {
-            // Spawn coin at a random heights reachable by jumping
-            let minHeight = groundY - 30 * scale; 
-            let maxHeight = groundY - 160 * scale; // Higher up
+            let minHeight = groundY - 40 * scale; 
+            let maxHeight = groundY - 180 * scale; 
             let spawnY = maxHeight + Math.random() * (minHeight - maxHeight);
             
             coins.push({
                 x: canvas.width,
                 y: spawnY,
-                width: 30 * scale, // 1.5x bigger
+                width: 30 * scale,
                 height: 30 * scale,
-                frame: Math.random() * Math.PI * 2 // Starting frame for rotation animation
+                frame: Math.random() * Math.PI * 2
             });
         }
 
-        // Initial clouds
         for(let i=0; i<6; i++) {
             createCloud(Math.random() * canvas.width);
         }
@@ -322,7 +336,7 @@
 
         window.addEventListener('keydown', (e) => {
             if (e.code === 'Space') {
-                e.preventDefault(); // Prevent scrolling
+                e.preventDefault(); 
                 if (isGameOver) {
                     resetGame();
                 } else {
@@ -331,7 +345,6 @@
             }
         });
 
-        // Touch handling (passive: false to prevent scroll)
         window.addEventListener('touchstart', (e) => {
             e.preventDefault();
             if (isGameOver) {
@@ -374,21 +387,26 @@
             isGameOver = false;
             score = 0;
             GAME_SPEED = baseSpeed;
-            nextMilestone = 500;
+            nextMilestone = 2000; // Reset milestone logic
             isNight = false;
+            lives = 0; // Starts with 0
+            coinsCollected = 0;
             
             obstacles.length = 0;
             coins.length = 0;
-            shields.length = 0;
-            nextShieldSpawnScore = 1500;
+            extraLives.length = 0;
+            nextExtraLifeScore = 2500;
+            extraLifeGap = 2500;
             
             horse.y = groundY - horse.height * scale;
-            horse.hasShield = false;
+            horse.invincibleTimer = 0;
             horse.vy = 0;
             horse.isJumping = false;
             
             gameOverScreen.style.display = 'none';
             scoreDisplay.style.color = 'white';
+            
+            updateUI();
             
             lastTime = performance.now();
             obstacleSpawnTimer = 0;
@@ -399,7 +417,7 @@
 
         // --- Drawing Codes ---
         function drawStartScreen() {
-            render(); // draw background
+            render(); 
             ctx.fillStyle = 'rgba(0,0,0,0.5)';
             ctx.fillRect(0,0,canvas.width,canvas.height);
             ctx.fillStyle = 'white';
@@ -415,20 +433,8 @@
             
             const sx = scale; 
 
-            // Shield glow
-            if (horse.hasShield) {
-                ctx.save();
-                ctx.fillStyle = 'rgba(135, 206, 250, 0.4)'; // LightSkyBlue aura
-                ctx.shadowColor = '#00BFFF';
-                ctx.shadowBlur = 15 * sx;
-                ctx.beginPath();
-                ctx.arc(30 * sx, 25 * sx, 45 * sx, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.restore();
-            }
-
             // Body
-            ctx.fillStyle = '#8B4513'; // SaddleBrown
+            ctx.fillStyle = '#8B4513';
             ctx.beginPath();
             ctx.roundRect(10 * sx, 15 * sx, 40 * sx, 25 * sx, 10 * sx);
             ctx.fill();
@@ -444,7 +450,7 @@
 
             // Snout
             ctx.beginPath();
-            ctx.fillStyle = '#A0522D'; // Sienna
+            ctx.fillStyle = '#A0522D';
             ctx.roundRect(50 * sx, 10 * sx, 15 * sx, 8 * sx, 3 * sx);
             ctx.fill();
             
@@ -463,8 +469,7 @@
             ctx.fill();
 
             // Legs
-            ctx.fillStyle = '#5C4033'; // Dark brown
-            // Animation logic for legs
+            ctx.fillStyle = '#5C4033'; 
             let legRot1 = 0, legRot2 = 0, legRot3 = 0, legRot4 = 0;
 
             if (isJumping) {
@@ -478,23 +483,20 @@
                 legRot4 = cycle * 0.8;
             }
 
-            // Draw leg helper
             function drawLeg(lx, ly, rot, isBack) {
                 ctx.save();
                 ctx.translate(lx, ly);
                 ctx.rotate(rot);
-                ctx.fillStyle = isBack ? '#3E2723' : '#5C4033'; // Darker for back legs
+                ctx.fillStyle = isBack ? '#3E2723' : '#5C4033';
                 ctx.fillRect(-3 * sx, 0, 6 * sx, 18 * sx);
                 ctx.restore();
             }
 
-            // Back-layer Legs (drawn first)
-            drawLeg(48 * sx, 35 * sx, legRot2, true); // Front back-leg
-            drawLeg(23 * sx, 35 * sx, legRot4, true); // Back back-leg
+            drawLeg(48 * sx, 35 * sx, legRot2, true);
+            drawLeg(23 * sx, 35 * sx, legRot4, true);
             
-            // Front-layer Legs (drawn second)
-            drawLeg(40 * sx, 35 * sx, legRot1, false); // Front front-leg
-            drawLeg(15 * sx, 35 * sx, legRot3, false); // Back front-leg
+            drawLeg(40 * sx, 35 * sx, legRot1, false);
+            drawLeg(15 * sx, 35 * sx, legRot3, false);
 
             // Tail
             ctx.strokeStyle = '#3E2723';
@@ -541,7 +543,6 @@
                 ctx.lineTo(w, h);
                 ctx.fill();
                 
-                // Rock shadow/detail
                 ctx.fillStyle = isNight ? '#3A3A3A' : '#696969';
                 ctx.beginPath();
                 ctx.moveTo(w*0.5, 0);
@@ -559,20 +560,18 @@
                 ctx.arc(w*0.5, h*0.3, w*0.3, 0, Math.PI*2);
                 ctx.fill();
                 
-                // Bush highlight
                 ctx.fillStyle = isNight ? '#2E7D32' : '#4CAF50';
                 ctx.beginPath();
                 ctx.arc(w*0.4, h*0.25, w*0.15, 0, Math.PI*2);
                 ctx.fill();
 
             } else if (obs.type === 'crate') {
-                ctx.fillStyle = isNight ? '#8B7355' : '#D2B48C'; // Tan
+                ctx.fillStyle = isNight ? '#8B7355' : '#D2B48C';
                 ctx.fillRect(0, 0, w, h);
-                ctx.strokeStyle = isNight ? '#5C3317' : '#8B4513'; // SaddleBrown
+                ctx.strokeStyle = isNight ? '#5C3317' : '#8B4513';
                 ctx.lineWidth = 3 * sx;
                 ctx.strokeRect(0, 0, w, h);
                 
-                // Crate diagonal planks
                 ctx.beginPath();
                 ctx.moveTo(0, 0);
                 ctx.lineTo(w, h);
@@ -597,61 +596,50 @@
             ctx.fill();
         }
 
-        function drawShield(ctx, shield) {
+        function drawExtraLife(ctx, el) { 
             ctx.save();
-            ctx.translate(shield.x + shield.width / 2, shield.y + shield.height / 2);
-            
+            ctx.translate(el.x, el.y);
             const sx = scale;
-            
-            // Shield glow effect pulsating
-            ctx.globalAlpha = 0.5 + Math.abs(Math.sin(shield.frame)) * 0.5;
-            ctx.fillStyle = '#00BFFF'; // Deep sky blue
+
+            // Glowing backdrop
+            ctx.fillStyle = 'rgba(255, 215, 0, 0.4)';
             ctx.beginPath();
-            ctx.arc(0, 0, shield.width * 0.7, 0, Math.PI * 2);
+            ctx.arc(el.width/2, el.height/2, el.width/2 + 5 * Math.abs(Math.sin(performance.now()/200)), 0, Math.PI*2);
             ctx.fill();
-            
-            // Inner solid shield
-            ctx.globalAlpha = 1;
-            ctx.fillStyle = '#1E90FF'; // Dodger blue
-            ctx.beginPath();
-            ctx.moveTo(0, shield.height * 0.4);
-            ctx.lineTo(shield.width * 0.4, 0);
-            ctx.lineTo(shield.width * 0.4, -shield.height * 0.3);
-            ctx.lineTo(-shield.width * 0.4, -shield.height * 0.3);
-            ctx.lineTo(-shield.width * 0.4, 0);
-            ctx.closePath();
-            ctx.fill();
-            
-            ctx.strokeStyle = '#FFFFFF';
-            ctx.lineWidth = 2 * sx;
-            ctx.stroke();
-            
+
+            // Mini Horse Icon
+            ctx.fillStyle = '#8B4513';
+            ctx.beginPath(); ctx.roundRect(5 * sx, 5 * sx, 20 * sx, 20 * sx, 5 * sx); ctx.fill();
+
+            ctx.fillStyle = '#A0522D';
+            ctx.beginPath(); ctx.roundRect(0, 12 * sx, 12 * sx, 10 * sx, 3 * sx); ctx.fill();
+
+            ctx.fillStyle = 'black';
+            ctx.beginPath(); ctx.arc(8 * sx, 10 * sx, 2 * sx, 0, Math.PI*2); ctx.fill();
+
+            ctx.fillStyle = '#8B4513';
+            ctx.beginPath(); ctx.moveTo(12 * sx, 5 * sx); ctx.lineTo(18 * sx, -3 * sx); ctx.lineTo(22 * sx, 5 * sx); ctx.fill();
             ctx.restore();
         }
 
         function drawCoin(ctx, coin) {
             ctx.save();
-            // Center of the coin for rotation/scaling
             ctx.translate(coin.x + coin.width / 2, coin.y + coin.height / 2);
             
-            // Coin spinning effect using horizontal scale
             let rotScaleX = Math.abs(Math.cos(coin.frame));
-            if (rotScaleX < 0.1) rotScaleX = 0.1; // Minimum width so it doesn't entirely vanish
+            if (rotScaleX < 0.1) rotScaleX = 0.1;
             
             ctx.scale(rotScaleX, 1);
             
-            // Main Gold circular base
-            ctx.fillStyle = '#FFD700'; // Gold
+            ctx.fillStyle = '#FFD700';
             ctx.beginPath();
             ctx.arc(0, 0, coin.width / 2, 0, Math.PI * 2);
             ctx.fill();
             
-            // Outer darker ring
-            ctx.strokeStyle = '#DAA520'; // Goldenrod
+            ctx.strokeStyle = '#DAA520';
             ctx.lineWidth = 2 * scale;
             ctx.stroke();
             
-            // Inner decorative ring
             ctx.beginPath();
             ctx.arc(0, 0, coin.width / 3.5, 0, Math.PI * 2);
             ctx.stroke();
@@ -659,7 +647,6 @@
             ctx.restore();
         }
 
-        // --- Core Engine logic ---
         function checkCollision(obs) {
             const sx = scale;
             const hx = horse.x + 10 * sx;
@@ -704,23 +691,21 @@
 
             if (dt > 0.1) {
                 animationId = requestAnimationFrame(update);
-                return; // Prevent extreme jumps on tab resume
+                return; 
             }
 
-            // Update Score System
             let scoreIncrement = 60 * dt * (GAME_SPEED / baseSpeed);
             score += scoreIncrement;
-            scoreDisplay.textContent = `Score: ${Math.floor(score)}`;
+            updateUI();
             
-            // Cycle day/night every 1000 points
             isNight = Math.floor(score / 1000) % 2 === 1;
             
             if (score >= nextMilestone) {
                 playSound('milestone');
-                GAME_SPEED += 50; // Increase difficulty
-                nextMilestone += 500;
+                // Percentile difficulty scaling
+                GAME_SPEED *= 1.10; 
+                nextMilestone += 2000; // Longer interval for speed boost
                 
-                // Visual feedback for milestone
                 scoreDisplay.style.color = 'gold';
                 scoreDisplay.style.transform = 'scale(1.2)';
                 scoreDisplay.style.transition = 'transform 0.2s';
@@ -730,11 +715,9 @@
                 }, 500);
             }
 
-            // Update Horse Physics
             horse.vy += horse.gravity * scale * dt;
             horse.y += horse.vy * dt;
 
-            // Ground Collision
             const maxHorseY = groundY - horse.height * scale;
             if (horse.y >= maxHorseY) {
                 horse.y = maxHorseY;
@@ -748,7 +731,10 @@
                 horse.runFrame++;
             }
 
-            // Update Clouds
+            if (horse.invincibleTimer > 0) {
+                horse.invincibleTimer -= dt;
+            }
+
             clouds.forEach(cloud => {
                 cloud.x -= cloud.speed * scale * dt;
             });
@@ -759,19 +745,15 @@
                 }
             }
 
-            // Update Stars (Night Mode parallax)
             if (isNight) {
                 stars.forEach(star => {
-                    star.x -= GAME_SPEED * scale * dt * 0.1; // slow background movement
-                    // Twinkling effect
+                    star.x -= GAME_SPEED * scale * dt * 0.1;
                     star.alpha += (Math.random() - 0.5) * 0.05;
                     star.alpha = Math.max(0.1, Math.min(1, star.alpha));
-                    
                     if (star.x < 0) star.x = canvas.width;
                 });
             }
 
-            // Update Obstacles & Spawning
             obstacleSpawnTimer -= dt;
             if (obstacleSpawnTimer <= 0) {
                 spawnObstacle();
@@ -785,20 +767,25 @@
                 obs.x -= GAME_SPEED * scale * dt;
 
                 if (checkCollision(obs)) {
-                    if (horse.hasShield) {
+                    if (horse.invincibleTimer <= 0) {
                         playSound('crash');
-                        horse.hasShield = false;
-                        obstacles.splice(i, 1); // Break the obstacle
-                        continue;
-                    } else {
-                        playSound('crash');
-                        isGameOver = true;
-                        if (score > highScore) {
-                            highScore = score;
-                            localStorage.setItem('horseRunnerHighScore', highScore);
-                            highScoreDisplay.textContent = `High Score: ${Math.floor(highScore)}`;
+                        
+                        // Game Over immediately if Lives <= 0
+                        if (lives <= 0) {
+                            isGameOver = true;
+                            if (score > highScore) {
+                                highScore = score;
+                                localStorage.setItem('horseRunnerHighScore', highScore);
+                                updateUI();
+                            }
+                            gameOverScreen.style.display = 'flex';
+                        } else {
+                            // Subract a life and continue
+                            lives--;
+                            updateUI();
+                            obstacles.splice(i, 1);
+                            horse.invincibleTimer = 2.0;
                         }
-                        gameOverScreen.style.display = 'flex';
                     }
                 }
 
@@ -807,37 +794,39 @@
                 }
             }
             
-            // Update Shields & Spawning
-            if (score >= nextShieldSpawnScore) {
-                shields.push({
+            if (score >= nextExtraLifeScore) {
+                extraLives.push({
                     x: canvas.width,
                     y: groundY - (50 + Math.random() * 50) * scale,
                     width: 30 * scale,
                     height: 30 * scale,
                     frame: Math.random() * Math.PI * 2
                 });
-                nextShieldSpawnScore += 1500;
+                extraLifeGap += 1000; // Gap increases by 1000 each time
+                nextExtraLifeScore += extraLifeGap; // 2500 -> 6000 -> 10500 -> 16000
             }
             
-            for (let i = shields.length - 1; i >= 0; i--) {
-                let shield = shields[i];
-                shield.x -= GAME_SPEED * scale * dt;
-                shield.frame += dt * 3; // For floating/pulsating
-                shield.y += Math.sin(shield.frame) * scale;
+            for (let i = extraLives.length - 1; i >= 0; i--) {
+                let el = extraLives[i];
+                el.x -= GAME_SPEED * scale * dt;
+                el.frame += dt * 3; 
+                el.y += Math.sin(el.frame) * scale;
                 
-                if (checkCoinCollision(shield)) { // Using same logic as coin for collision box
-                    playSound('milestone'); // sound for collecting shield
-                    horse.hasShield = true;
-                    shields.splice(i, 1);
+                if (checkCoinCollision(el)) { 
+                    playSound('milestone');
+                    if(lives < MAX_LIVES) {
+                        lives++;
+                        updateUI();
+                    }
+                    extraLives.splice(i, 1);
                     continue;
                 }
                 
-                if (shield.x + shield.width < 0) {
-                    shields.splice(i, 1);
+                if (el.x + el.width < 0) {
+                    extraLives.splice(i, 1);
                 }
             }
 
-            // Update Coins & Spawning
             coinSpawnTimer -= dt;
             if (coinSpawnTimer <= 0) {
                 spawnCoin();
@@ -849,14 +838,21 @@
             for (let i = coins.length - 1; i >= 0; i--) {
                 let coin = coins[i];
                 coin.x -= GAME_SPEED * scale * dt;
-                coin.frame += dt * 6; // Controls spin speed
+                coin.frame += dt * 6; 
 
                 if (checkCoinCollision(coin)) {
                     playSound('coin');
                     score += 50;
+                    coinsCollected++;
+                    
+                    if (coinsCollected > 0 && coinsCollected % 50 === 0) {
+                        if (lives < MAX_LIVES) lives++;
+                        playSound('milestone');
+                    }
+                    updateUI();
+                    
                     coins.splice(i, 1);
                     
-                    // Small flash of gold to acknowledge hit
                     scoreDisplay.style.color = 'gold';
                     setTimeout(() => scoreDisplay.style.color = 'white', 200);
                     continue;
@@ -875,12 +871,10 @@
         }
 
         function render() {
-            // 1. Draw Background Sky
             ctx.fillStyle = isNight ? '#0B0C10' : '#87CEEB';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
             if (isNight) {
-                // Draw stars
                 stars.forEach(star => {
                     ctx.fillStyle = `rgba(255, 255, 255, ${star.alpha})`;
                     ctx.beginPath();
@@ -888,25 +882,20 @@
                     ctx.fill();
                 });
                 
-                // Draw Moon
-                ctx.fillStyle = '#FFF8DC'; // Cornsilk / pale yellow
+                ctx.fillStyle = '#FFF8DC'; 
                 ctx.beginPath();
                 ctx.arc(canvas.width * 0.8, canvas.height * 0.2, 40 * scale, 0, Math.PI * 2);
                 ctx.fill();
             }
 
-            // 2. Draw Clouds
             clouds.forEach(cloud => drawCloud(ctx, cloud));
 
-            // 3. Draw Ground background
-            ctx.fillStyle = isNight ? '#3E2723' : '#8B4513'; // Dirt layer (darker at night)
+            ctx.fillStyle = isNight ? '#3E2723' : '#8B4513';
             ctx.fillRect(0, groundY + 20 * scale, canvas.width, canvas.height - groundY - 20 * scale);
             
-            // Draw Grass layer
             ctx.fillStyle = isNight ? '#1B5E20' : '#4CAF50'; 
             ctx.fillRect(0, groundY, canvas.width, 20 * scale);
 
-            // 4. Parallax effect for grass texture
             ctx.strokeStyle = isNight ? '#0A2E0C' : '#388E3C';
             ctx.lineWidth = 3 * scale;
             ctx.beginPath();
@@ -917,20 +906,21 @@
             }
             ctx.stroke();
 
-            // 5. Draw Obstacles (Back to Front)
             obstacles.forEach(obs => drawObstacle(ctx, obs));
             
-            // 6. Draw Collectible Coins
             coins.forEach(coin => drawCoin(ctx, coin));
             
-            // 6.5 Draw Shields
-            shields.forEach(shield => drawShield(ctx, shield));
+            extraLives.forEach(el => drawExtraLife(ctx, el));
 
-            // 7. Draw Horse
-            drawHorse(ctx, horse.x, horse.y, horse.width * scale, horse.height * scale, scale, horse.isJumping, horse.runFrame);
+            if (horse.invincibleTimer > 0) {
+                if (Math.floor(horse.invincibleTimer * 10) % 2 === 0) {
+                    drawHorse(ctx, horse.x, horse.y, horse.width * scale, horse.height * scale, scale, horse.isJumping, horse.runFrame);
+                }
+            } else {
+                drawHorse(ctx, horse.x, horse.y, horse.width * scale, horse.height * scale, scale, horse.isJumping, horse.runFrame);
+            }
         }
 
-        // --- Boot sequence ---
         if(!gameStarted) {
             drawStartScreen();
         }
